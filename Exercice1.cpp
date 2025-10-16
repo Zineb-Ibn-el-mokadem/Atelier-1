@@ -1,86 +1,167 @@
+
+
 #include <iostream>
 #include <vector>
 #include <string>
+#include <cmath>
+#include <iomanip>
 #include <functional>  // pour std::hash
+#include <memory>
+#include <sstream>
+#include <cstdint>
+
 
 using namespace std;
 
-// Fonction pour simuler un hash (ici on utilise std::hash pour simplifier)
-// string simpleHash(const string &data) {
-//     hash<string> hasher;
-//     size_t hashValue = hasher(data);
-//     return to_string(hashValue);
-// }
 
-string simpleHash(const string &data) {
-    unsigned long long hash = 0;
+// Classe Node (nœud de l’arbre)
+class Node {
+public:
+    string hash;
+    Node* left;
+    Node* right;
 
-    // Algorithme de hachage simple inspiré de djb2
-    for (char c : data) {
-        hash = ((hash << 5) + hash) + c; // hash * 33 + c
+    Node(const string& h) : hash(h), left(nullptr), right(nullptr) {}
+};
+
+
+
+// Fonction de hachage légère inspirée de FNV-1a et MurmurHash
+string fastSHA256(const string& data) {
+    const uint64_t FNV_OFFSET = 1469598103934665603ULL;
+    const uint64_t FNV_PRIME  = 1099511628211ULL;
+
+    uint64_t hash1 = FNV_OFFSET;
+    uint64_t hash2 = FNV_OFFSET ^ 0xDEADBEEFCAFEBABEULL;
+
+    // Mélange double pour meilleure distribution
+    for (unsigned char c : data) {
+        hash1 ^= c;
+        hash1 *= FNV_PRIME;
+        hash1 ^= (hash1 >> 13);
+
+        hash2 ^= (c + 0x9e3779b97f4a7c15ULL + (hash2 << 6) + (hash2 >> 2));
     }
 
-    // Convertir le nombre obtenu en chaîne hexadécimale
-    string hex = "";
-    const char *hexChars = "0123456789abcdef";
-    while (hash > 0) {
-        hex = hexChars[hash % 16] + hex;
-        hash /= 16;
-    }
+    // Combine les deux en pseudo-SHA256 (64 caractères)
+    stringstream ss;
+    ss << hex << setw(16) << setfill('0') << (hash1 ^ (hash2 >> 7))
+       << setw(16) << setfill('0') << (hash2 ^ (hash1 << 3))
+       << setw(16) << setfill('0') << (~hash1)
+       << setw(16) << setfill('0') << (~hash2);
 
-    if (hex == "") hex = "0"; // sécurité pour éviter une chaîne vide
-    return hex;
+    string result = ss.str();
+    return result.substr(0, 64);
 }
 
-// Fonction pour construire un arbre de Merkle et retourner la racine
-string buildMerkleRoot(vector<string> transactions) {
-    if (transactions.empty()) return "";
+//  Classe MerkleTree
+class MerkleTree {
+private:
+    vector<Node*> leaves;
+    Node* root;
 
-    // Étape 1 : convertir chaque transaction en hash
-    vector<string> level;
-    for (const auto &tx : transactions) {
-        level.push_back(simpleHash(tx));
+public:
+    MerkleTree(const vector<string>& transactions) {
+        buildTree(transactions);
     }
 
-    // Étape 2 : construire l'arbre jusqu'à la racine
-    while (level.size() > 1) {
-        vector<string> newLevel;
-
-        for (size_t i = 0; i < level.size(); i += 2) {
-            // si nombre impair, on duplique le dernier hash
-            if (i + 1 == level.size()) {
-                level.push_back(level[i]);
-            }
-
-            // concaténer deux enfants et re-hasher
-            string combined = level[i] + level[i + 1];
-            newLevel.push_back(simpleHash(combined));
+    // Construction de l’arbre
+    void buildTree(vector<string> transactions) {
+        if (transactions.empty()) {
+            root = nullptr;
+            return;
         }
 
-        level = newLevel;  // passer au niveau supérieur
+        for (const auto& tx : transactions)
+            leaves.push_back(new Node(fastSHA256(tx)));
+
+        vector<Node*> currentLevel = leaves;
+
+        while (currentLevel.size() > 1) {
+            vector<Node*> newLevel;
+
+            for (size_t i = 0; i < currentLevel.size(); i += 2) {
+                if (i + 1 == currentLevel.size()) {
+                    currentLevel.push_back(currentLevel[i]);
+                }
+
+                string combined = currentLevel[i]->hash + currentLevel[i + 1]->hash;
+                Node* parent = new Node(fastSHA256(combined));
+                parent->left = currentLevel[i];
+                parent->right = currentLevel[i + 1];
+                newLevel.push_back(parent);
+            }
+
+            currentLevel = newLevel;
+        }
+
+        root = currentLevel[0];
     }
 
-    // Étape 3 : la racine est le seul élément restant
-    return level[0];
-}
+    // Fonction pour obtenir la racine
+    string getRootHash() const {
+        if (!root) return "";
+        return root->hash;
+    }
+
+  
+    // Affichage de l’arbre de manière horizontale 
+    void printTreeHorizontal(Node* node, int space = 0, int levelSpace = 6) const {
+        if (!node) return;
+
+        // Décalage vers la droite (impression en ordre inversé)
+        space += levelSpace;
+
+        // Afficher le sous-arbre droit d’abord
+        printTreeHorizontal(node->right, space);
+
+        // Afficher le nœud actuel
+        cout << endl;
+        for (int i = levelSpace; i < space; i++)
+            cout << " ";
+        cout << node->hash.substr(0, 6) << endl; // afficher juste 6 caractères du hash
+
+        // Afficher le sous-arbre gauche
+        printTreeHorizontal(node->left, space);
+    }
+
+    void display() const {
+        cout << "\n===== Structure de l’Arbre de Merkle =====\n";
+        printTreeHorizontal(root);
+    }
+};
 
 int main() {
-    // Exemple de transactions
     vector<string> transactions = {
-        "Alice -> Bob : 10 BTC",
-        "Bob -> Charlie : 5 BTC",
-        "Charlie -> Dave : 2 BTC",
-        "Dave -> Eve : 1 BTC"
+        "Zineb-> Merieme : 10 BTC",
+        "Hamza -> Sara : 5 BTC",
+        "Mehdi -> Yassir : 2 BTC",
+        "Sara -> Karim : 1 BTC",
+        "Siham->Salma : 8 BTC",
+        "Reda -> Nora : 12 BTC",
+        "Khouloud -> Soumaia : 6BTC",
+        "Aya -> Zineb: 3 BTC"
     };
 
-    cout << "=== Arbre de Merkle ===" << endl;
+    cout << "=== Transactions ===" << endl;
     for (int i = 0; i < transactions.size(); i++) {
-        cout << "Transaction " << i+1 << ": " << transactions[i] << endl;
+        cout << "Transaction " << i + 1 << ": " << transactions[i] << endl;
     }
 
-    string merkleRoot = buildMerkleRoot(transactions);
+    MerkleTree merkle(transactions);
 
-    cout << "\nMerkle Root: " << merkleRoot << endl;
+    merkle.display();
+    cout << "\nMerkle Root: " << merkle.getRootHash() << endl;
 
     return 0;
 }
+
+
+
+
+
+
+
+
+
+
